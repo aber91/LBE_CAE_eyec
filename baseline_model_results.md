@@ -1,58 +1,72 @@
-# Línea Base CAE - Eyectores de vacío
+# Baseline CAE/IPMVP - Eyectores de vacío
 
-## 1) Preparación de datos
+## Contexto y alcance
+- Objetivo actual: baseline de **LNG (H)** para el sistema de vacío.
+- Extensión futura prevista: **E_total = LNG + Fuel Gas** con la misma estructura de drivers físicos.
 
-- Archivo: `data/LB_CAE_Eyectores.xlsx`
-- Filtros aplicados: **Crude feed (B) > 140 t/h** y **Tflash (C) > 300 ºC**.
-- Exclusión adicional para estabilidad numérica: F, G y H > 0.
-- Observaciones válidas finales: **9937**.
+## Datos y validación
+- Observaciones válidas tras filtros operativos: **9937**.
+- Split: **train/test = 80/20** (aleatorio con semilla fija 42).
+- Filtros: B > 140 t/h, C > 300 ºC, F>0, G>0, H>0.
 
-## 2) Calidad de betún (viscosidad -> PEN -> grado)
+## Comparativa de modelos candidatos
 
-- La hoja `Visc_data` se usa para interpolar PEN desde viscosidad (F).
-- Grados considerados: 15/25, 35/50, 50/70, 70/100 y 160/220.
+| Modelo | Variables finales | R² test | adjR² test | CVRMSE test (%) | NMBE test (%) | #vars |
+|---|---|---:|---:|---:|---:|---:|
+| C_calidad_viscosidad | B, E, C, F | 0.7336 | 0.7331 | 4.90 | 0.08 | 4 |
+| A_base | B, E, C | 0.7331 | 0.7327 | 4.91 | 0.06 | 3 |
+| B_interaccion | B, E, C | 0.7331 | 0.7327 | 4.91 | 0.06 | 3 |
+| C_calidad_dummy | B, E, C, visc_hi_dummy | 0.7313 | 0.7308 | 4.92 | 0.06 | 4 |
+| D_reducido | B, E | 0.5458 | 0.5453 | 6.40 | 0.07 | 2 |
 
-| Grado | Nº muestras |
-|---|---:|
-| 15/25 | 1498 |
-| 35/50 | 3859 |
-| 50/70 | 2045 |
-| 70/100 | 1062 |
-| 160/220 | 1473 |
+## Modelo final recomendado
 
-## 3) Modelo LB (OLS con no linealidades e interacciones)
+**Seleccionado:** C_calidad_viscosidad
 
-**Variable objetivo:** H (LNG flow rate, kg/h).
+### Ecuación
 
-Variables usadas: 1, BC, EF, DF, grade_160_220, G_logF, grade_35_50, pen2, B2, B, C2.
+```
+LNG_hat = -1118.184492 + (5.726244)·B + (0.608335)·E + (3.762346)·C + (0.023843)·F
+```
 
-| Término | Coeficiente |
-|---|---:|
-| 1 | 1287.80722535 |
-| BC | 0.03875603 |
-| EF | 0.00753193 |
-| DF | -0.00136287 |
-| grade_160_220 | -14.86668323 |
-| G_logF | -0.14568771 |
-| grade_35_50 | 10.39789756 |
-| pen2 | 0.00005543 |
-| B2 | 0.02012243 |
-| B | -13.40596180 |
-| C2 | -0.00524184 |
+### Coeficientes y significancia (train)
 
-## 4) Métricas estadísticas
+| Término | Coeficiente | p-value (aprox) |
+|---|---:|---:|
+| Intercepto | -1118.184492 | 0 |
+| B | 5.726244 | 0 |
+| E | 0.608335 | 2.49109e-05 |
+| C | 3.762346 | 0 |
+| F | 0.023843 | 9.53237e-12 |
 
-| Escenario | R² | R² ajustado | CVRMSE (%) | NMBE (%) |
+### Métricas (modelo final)
+
+| Escenario | R² | adj R² | CVRMSE (%) | NMBE (%) |
 |---|---:|---:|---:|---:|
-| Ajuste completo LB | 0.755338 | 0.755067 | 4.604 | -0.000 |
-| Train (80%) | 0.712741 | 0.712343 | 4.747 | -0.000 |
-| Test (20%) | 0.844173 | 0.843306 | 3.933 | 0.192 |
+| Train | 0.7345 | 0.7343 | 4.77 | 0.00 |
+| Test | 0.7336 | 0.7331 | 4.90 | 0.08 |
+| Global | 0.7343 | 0.7342 | 4.80 | 0.02 |
 
-## 5) Criterio de aceptación CAE (estadístico)
+### Diagnóstico de multicolinealidad (VIF)
 
-- Referencia habitual M&V: **R² > 0.75**, **CVRMSE < 20%**, **|NMBE| < 5%**.
-- El modelo **cumple holgadamente CVRMSE y NMBE**; y cumple R² en calibración completa LB.
+| Variable | VIF |
+|---|---:|
+| B | 1.148 |
+| C | 1.736 |
+| E | 1.049 |
+| F | 1.861 |
 
-## 6) Ecuación de predicción
+### Residuos en test
 
-LNG_hat = 1287.807225 + (0.038756)·BC + (0.007532)·EF + (-0.001363)·DF + (-14.866683)·grade_160_220 + (-0.145688)·G_logF + (10.397898)·grade_35_50 + (0.000055)·pen2 + (0.020122)·B2 + (-13.405962)·B + (-0.005242)·C2
+- Residuo medio: **0.9334**
+- MAE residuos: **43.1848**
+- Rango residuos: **[-214.7337, 486.0523]**
+
+## Justificación técnica defendible en auditoría
+
+- **Carga (B):** principal driver de demanda energética del sistema de vacío.
+- **Presión de cabeza (E):** representa esfuerzo del tren de eyectores para sostener vacío operativo.
+- **Temperatura flash (C):** refleja severidad térmica y carga de vapores al sistema.
+- **Interacción BxE** (si aplica): solo se mantiene cuando mejora estabilidad y tiene sentido físico (más carga a menor presión efectiva implica mayor exigencia).
+- **Calidad (F o dummy):** se incluye solo si aporta señal estadística robusta sin degradar VIF.
+- Se prioriza **parsimonia (4–5 variables máx.)** para trazabilidad y robustez CAE/IPMVP.
