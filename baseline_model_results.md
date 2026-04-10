@@ -35,9 +35,25 @@ LNG_hat = -1118.184492 + (5.726244)·B + (0.608335)·E + (3.762346)·C + (0.0238
 |---|---:|---:|
 | Intercepto | -1118.184492 | 0 |
 | B | 5.726244 | 0 |
-| E | 0.608335 | 2.49109e-05 |
+| E | 0.608335 | 2.5187e-05 |
 | C | 3.762346 | 0 |
-| F | 0.023843 | 9.53237e-12 |
+| F | 0.023843 | 1.0228e-11 |
+
+### Pruebas estadísticas de correlación y significancia global (train)
+
+- **Correlación Pearson (Y vs Ŷ):** r = **0.8570**
+- **ANOVA F global:** F = **5493.7129**, p-value = **0**
+- Interpretación: p-value global < 0.05 respalda que el modelo explica varianza de LNG mejor que un modelo sin predictores.
+
+### Coeficientes con error estándar, t-stat e IC95% (train)
+
+| Término | Coeficiente | Error estándar | t-stat | p-value | IC95% inferior | IC95% superior |
+|---|---:|---:|---:|---:|---:|---:|
+| Intercepto | -1118.184492 | 23.518932 | -47.5440 | 0 | -1164.287776 | -1072.081209 |
+| B | 5.726244 | 0.043957 | 130.2691 | 0 | 5.640076 | 5.812411 |
+| E | 0.608335 | 0.144305 | 4.2156 | 2.5187e-05 | 0.325458 | 0.891211 |
+| C | 3.762346 | 0.071036 | 52.9638 | 0 | 3.623096 | 3.901595 |
+| F | 0.023843 | 0.003499 | 6.8134 | 1.0228e-11 | 0.016983 | 0.030703 |
 
 ### Métricas (modelo final)
 

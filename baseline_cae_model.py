@@ -16,7 +16,7 @@ import random
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from statistics import NormalDist
+from statistics import NormalDist, correlation
 
 NS = {'a': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 NORM = NormalDist()
@@ -127,6 +127,103 @@ def mat_vec_mul(a, x):
     return [sum(ai * xi for ai, xi in zip(row, x)) for row in a]
 
 
+def betacf(a, b, x):
+    """Continued fraction for incomplete beta function (Numerical Recipes)."""
+    max_iter = 200
+    eps = 3.0e-14
+    fpmin = 1.0e-300
+
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+
+    for m in range(1, max_iter + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        h *= d * c
+
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < eps:
+            break
+
+    return h
+
+
+def betainc_reg(a, b, x):
+    """Regularized incomplete beta I_x(a,b)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    ln_bt = (
+        math.lgamma(a + b)
+        - math.lgamma(a)
+        - math.lgamma(b)
+        + a * math.log(x)
+        + b * math.log(1.0 - x)
+    )
+    bt = math.exp(ln_bt)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return bt * betacf(a, b, x) / a
+    return 1.0 - bt * betacf(b, a, 1.0 - x) / b
+
+
+def student_t_cdf(t, dof):
+    if dof <= 0:
+        return 0.5
+    if t == 0:
+        return 0.5
+    x = dof / (dof + t * t)
+    ib = betainc_reg(dof / 2.0, 0.5, x)
+    if t > 0:
+        return 1.0 - 0.5 * ib
+    return 0.5 * ib
+
+
+def f_cdf(x, dfn, dfd):
+    if x <= 0.0:
+        return 0.0
+    if dfn <= 0 or dfd <= 0:
+        return 0.0
+    z = (dfn * x) / (dfn * x + dfd)
+    return betainc_reg(dfn / 2.0, dfd / 2.0, z)
+
+
+def student_t_ppf(p, dof):
+    # Inversión numérica simple (búsqueda binaria), suficiente para IC al 95%.
+    lo, hi = -20.0, 20.0
+    for _ in range(120):
+        mid = 0.5 * (lo + hi)
+        cmid = student_t_cdf(mid, dof)
+        if cmid < p:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 def ols_fit(x, y):
     n = len(x)
     p = len(x[0])
@@ -151,9 +248,20 @@ def ols_fit(x, y):
 
     se = [math.sqrt(max(0.0, sigma2 * xtx_inv[i][i])) for i in range(p)]
     tvals = [beta[i] / se[i] if se[i] > 0 else float('inf') for i in range(p)]
+    pvals = [2 * (1 - student_t_cdf(abs(tv), dof)) if math.isfinite(tv) else 0.0 for tv in tvals]
 
-    # Aproximación normal para p-value bilateral.
-    pvals = [2 * (1 - NORM.cdf(abs(tv))) if math.isfinite(tv) else 0.0 for tv in tvals]
+    yavg = sum(y) / n
+    sst = sum((yi - yavg) ** 2 for yi in y)
+    ssr = max(0.0, sst - sse)
+    dfn = max(1, p - 1)
+    dfd = dof
+    msr = ssr / dfn
+    mse = sse / dfd
+    f_stat = (msr / mse) if mse > 0 else float('inf')
+    f_pval = 1.0 - f_cdf(f_stat, dfn, dfd) if math.isfinite(f_stat) else 0.0
+
+    t_crit = student_t_ppf(0.975, dof)
+    ci95 = [(b - t_crit * s, b + t_crit * s) for b, s in zip(beta, se)]
 
     return {
         'beta': beta,
@@ -165,6 +273,13 @@ def ols_fit(x, y):
         'xtx_inv': xtx_inv,
         'n': n,
         'p': p,
+        'dof': dof,
+        'f_stat': f_stat,
+        'f_pval': f_pval,
+        'sse': sse,
+        'sst': sst,
+        'ssr': ssr,
+        'ci95': ci95,
     }
 
 
@@ -292,6 +407,7 @@ def evaluate_model(name, all_rows, train_rows, test_rows, base_features, locked_
     mal = calc_metrics(yal, yhat_al, len(selected))
 
     vifs = vif_for_feature_matrix(xtr, selected)
+    corr_y_yhat_train = correlation(ytr, yhat_tr) if len(ytr) > 1 else 0.0
 
     return {
         'name': name,
@@ -299,6 +415,12 @@ def evaluate_model(name, all_rows, train_rows, test_rows, base_features, locked_
         'beta': beta,
         'pvals': fit_tr['pvals'],
         'vifs': vifs,
+        'f_stat': fit_tr['f_stat'],
+        'f_pval': fit_tr['f_pval'],
+        'tvals': fit_tr['tvals'],
+        'se': fit_tr['se'],
+        'ci95': fit_tr['ci95'],
+        'corr_y_yhat_train': corr_y_yhat_train,
         'train': mtr,
         'test': mte,
         'all': mal,
@@ -371,6 +493,24 @@ def write_report(path, data, models, final_model):
         terms = ['Intercepto'] + final_model['features']
         for tname, b, p in zip(terms, final_model['beta'], final_model['pvals']):
             f.write(f'| {tname} | {b:.6f} | {p:.6g} |\n')
+
+        f.write('\n### Pruebas estadísticas de correlación y significancia global (train)\n\n')
+        f.write(f"- **Correlación Pearson (Y vs Ŷ):** r = **{final_model['corr_y_yhat_train']:.4f}**\n")
+        f.write(f"- **ANOVA F global:** F = **{final_model['f_stat']:.4f}**, p-value = **{final_model['f_pval']:.6g}**\n")
+        f.write('- Interpretación: p-value global < 0.05 respalda que el modelo explica varianza de LNG mejor que un modelo sin predictores.\n\n')
+
+        f.write('### Coeficientes con error estándar, t-stat e IC95% (train)\n\n')
+        f.write('| Término | Coeficiente | Error estándar | t-stat | p-value | IC95% inferior | IC95% superior |\n')
+        f.write('|---|---:|---:|---:|---:|---:|---:|\n')
+        for tname, b, se, tv, pv, ci in zip(
+            terms,
+            final_model['beta'],
+            final_model['se'],
+            final_model['tvals'],
+            final_model['pvals'],
+            final_model['ci95'],
+        ):
+            f.write(f'| {tname} | {b:.6f} | {se:.6f} | {tv:.4f} | {pv:.6g} | {ci[0]:.6f} | {ci[1]:.6f} |\n')
 
         f.write('\n### Métricas (modelo final)\n\n')
         f.write('| Escenario | R² | adj R² | CVRMSE (%) | NMBE (%) |\n')
